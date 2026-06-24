@@ -1,0 +1,94 @@
+import { useEffect, useState } from "react";
+import Login from "./pages/Login";
+import "./App.css";
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+
+    async function restoreSession() {
+      try {
+        const response = await fetch("/me", {
+          credentials: "include",
+        });
+
+        if (response.ok && active) {
+          setUser(await response.json());
+        }
+      } catch {
+        if (active) {
+          setUser(null);
+        }
+      } finally {
+        if (active) {
+          setCheckingSession(false);
+        }
+      }
+    }
+
+    restoreSession();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function handleLogin(username, password) {
+    if (!username.trim() || !password) {
+      return { ok: false, message: "Enter your username and password." };
+    }
+
+    try {
+      const response = await fetch("/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return { ok: false, message: data.message || "Login failed." };
+      }
+
+      const userResponse = await fetch("/me", {
+        credentials: "include",
+      });
+
+      if (!userResponse.ok) {
+        return { ok: false, message: "Your session could not be loaded." };
+      }
+
+      setUser(await userResponse.json());
+      return { ok: true, message: "" };
+    } catch {
+      return { ok: false, message: "Could not connect to the server." };
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await fetch("/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } finally {
+      setUser(null);
+    }
+  }
+
+  return (
+    <Login
+      checkingSession={checkingSession}
+      handleLogin={handleLogin}
+      handleLogout={handleLogout}
+      user={user}
+    />
+  );
+}
+
+export default App;
