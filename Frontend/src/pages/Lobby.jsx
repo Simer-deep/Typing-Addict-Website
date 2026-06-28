@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-// Edit this list to control which in-game names are blocked.
 const BLOCKED_NAME_TERMS = [
   "admin",
   "moderator",
@@ -25,20 +24,6 @@ const LEET_MAP = {
   "$": "s",
   "!": "i",
 };
-
-const CODE_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-function generateLobbyCode() {
-  while (true) {
-    const code = Array.from({ length: 6 }, () =>
-      CODE_CHARACTERS[Math.floor(Math.random() * CODE_CHARACTERS.length)]
-    ).join("");
-
-    if (/[A-Z]/.test(code) && /[0-9]/.test(code)) {
-      return code;
-    }
-  }
-}
 
 function normalizeName(value) {
   return value
@@ -70,20 +55,29 @@ function validateInGameName(value) {
   return "";
 }
 
+function readInviteCode() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("lobby")?.trim().toUpperCase() || "";
+}
+
 function Lobby({ handleLogout, user }) {
   const storageKey = `typing-addict-ingame-name-${user.user_id}`;
+  const inviteCodeRef = useRef(readInviteCode());
   const [savedName, setSavedName] = useState(() => localStorage.getItem(storageKey) || "");
   const [draftName, setDraftName] = useState(savedName);
   const [profileOpen, setProfileOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [lobbyMode, setLobbyMode] = useState("home");
-  const [joinCode, setJoinCode] = useState("");
+  const [joinCode, setJoinCode] = useState(() => inviteCodeRef.current);
+  const [joinRole, setJoinRole] = useState("player");
   const [joinMessage, setJoinMessage] = useState("");
+  const [inviteNotice, setInviteNotice] = useState("");
   const [lobbyName, setLobbyName] = useState("");
   const [playerLimit, setPlayerLimit] = useState(4);
   const [viewerLimit, setViewerLimit] = useState(12);
   const [createMessage, setCreateMessage] = useState("");
   const [createdInvite, setCreatedInvite] = useState(null);
+  const [joinLobbyInfo, setJoinLobbyInfo] = useState(null);
   const [activeGame, setActiveGame] = useState(null);
 
   const needsName = !savedName;
@@ -97,6 +91,158 @@ function Lobby({ handleLogout, user }) {
       .map((part) => part[0].toUpperCase())
       .join("") || "P";
   }, [titleName]);
+
+  useEffect(() => {
+    if (!inviteCodeRef.current) {
+      return;
+    }
+
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
+
+  useEffect(() => {
+    const inviteCode = inviteCodeRef.current;
+
+    if (!inviteCode || needsName) {
+      return;
+    }
+
+    inviteCodeRef.current = "";
+
+    let active = true;
+
+    async function checkInvite() {
+      try {
+        const response = await fetch(`/lobbies/${inviteCode}`, {
+          credentials: "include",
+        });
+        const data = await response.json();
+
+        if (!active) {
+          return;
+        }
+
+        if (!response.ok) {
+          setInviteNotice("Lobby not found.");
+          return;
+        }
+
+        setJoinLobbyInfo(data);
+        setJoinCode(inviteCode);
+        setLobbyMode("join");
+        setJoinMessage(`${data.name} is open. Pick player or viewer and join.`);
+      } catch {
+        if (active) {
+          setInviteNotice("Could not connect to the server.");
+        }
+      }
+    }
+
+    checkInvite();
+
+    return () => {
+      active = false;
+    };
+  }, [needsName]);
+
+  useEffect(() => {
+    if (lobbyMode !== "join") {
+      setJoinLobbyInfo(null);
+      return;
+    }
+
+    const cleanCode = joinCode.trim().toUpperCase();
+
+    if (!/^[A-Z0-9]{6}$/.test(cleanCode) || !/[A-Z]/.test(cleanCode) || !/[0-9]/.test(cleanCode)) {
+      setJoinLobbyInfo(null);
+      return;
+    }
+
+    let active = true;
+
+    async function loadLobbyInfo() {
+      try {
+        const response = await fetch(`/lobbies/${cleanCode}`, {
+          credentials: "include",
+        });
+        const data = await response.json();
+
+        if (!active) {
+          return;
+        }
+
+        if (!response.ok) {
+          setJoinLobbyInfo(null);
+          return;
+        }
+
+        setJoinLobbyInfo(data);
+
+        setJoinRole((current) => {
+          if (data.player_count >= data.player_limit && current === "player") {
+            if (data.viewer_count < data.viewer_limit && data.viewer_limit > 0) {
+              return "viewer";
+            }
+          }
+
+          if (data.viewer_count >= data.viewer_limit && current === "viewer") {
+            if (data.player_count < data.player_limit) {
+              return "player";
+            }
+          }
+
+          return current;
+        });
+      } catch {
+        if (active) {
+          setJoinLobbyInfo(null);
+        }
+      }
+    }
+
+    loadLobbyInfo();
+
+    return () => {
+      active = false;
+    };
+  }, [lobbyMode, joinCode]);
+
+  useEffect(() => {
+    if (!createdInvite) {
+      return;
+    }
+
+    let active = true;
+
+    async function refreshInviteCounts() {
+      try {
+        const response = await fetch(`/lobbies/${createdInvite.code}`, {
+          credentials: "include",
+        });
+        const data = await response.json();
+
+        if (!active || !response.ok) {
+          return;
+        }
+
+        setCreatedInvite((current) => ({
+          ...current,
+          playerCount: data.player_count,
+          viewerCount: data.viewer_count,
+        }));
+      } catch {
+        return;
+      }
+    }
+
+    refreshInviteCounts();
+    const timer = window.setInterval(refreshInviteCounts, 4000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [createdInvite?.code]);
 
   function saveName(event) {
     event.preventDefault();
@@ -126,9 +272,18 @@ function Lobby({ handleLogout, user }) {
     setJoinMessage("");
     setCreateMessage("");
     setCreatedInvite(null);
+    setJoinLobbyInfo(null);
+    setInviteNotice("");
   }
 
-  function submitJoinLobby(event) {
+  const playersFull = joinLobbyInfo
+    ? joinLobbyInfo.player_count >= joinLobbyInfo.player_limit
+    : false;
+  const viewersFull = joinLobbyInfo
+    ? joinLobbyInfo.viewer_count >= joinLobbyInfo.viewer_limit || joinLobbyInfo.viewer_limit <= 0
+    : false;
+
+  async function submitJoinLobby(event) {
     event.preventDefault();
     const cleanCode = joinCode.trim().toUpperCase();
 
@@ -137,14 +292,33 @@ function Lobby({ handleLogout, user }) {
       return;
     }
 
-    setActiveGame({
-      code: cleanCode,
-      name: "Joined lobby",
-      role: "player",
-    });
+    setJoinMessage("");
+
+    try {
+      const response = await fetch(`/lobbies/${cleanCode}/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ role: joinRole }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        setJoinMessage(data.message || "Could not join lobby.");
+        return;
+      }
+
+      setActiveGame({
+        code: data.code,
+        name: data.name,
+        role: data.role,
+      });
+    } catch {
+      setJoinMessage("Could not connect to the server.");
+    }
   }
 
-  function submitCreateLobby(event) {
+  async function submitCreateLobby(event) {
     event.preventDefault();
     const cleanLobbyName = lobbyName.trim().replace(/\s+/g, " ");
     const players = Number(playerLimit);
@@ -165,17 +339,38 @@ function Lobby({ handleLogout, user }) {
       return;
     }
 
-    const code = generateLobbyCode();
-    const link = `${window.location.origin}/?lobby=${code}`;
-
-    setCreatedInvite({
-      code,
-      link,
-      name: cleanLobbyName,
-      players,
-      viewers,
-    });
     setCreateMessage("");
+
+    try {
+      const response = await fetch("/lobbies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: cleanLobbyName,
+          player_limit: players,
+          viewer_limit: viewers,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        setCreateMessage(data.message || "Could not create lobby.");
+        return;
+      }
+
+      setCreatedInvite({
+        code: data.code,
+        link: `${window.location.origin}/?lobby=${data.code}`,
+        name: data.name,
+        players: data.player_limit,
+        viewers: data.viewer_limit,
+        playerCount: data.player_count,
+        viewerCount: data.viewer_count,
+      });
+    } catch {
+      setCreateMessage("Could not connect to the server.");
+    }
   }
 
   function enterCreatedGame() {
@@ -238,6 +433,12 @@ function Lobby({ handleLogout, user }) {
               <h1 id="lobby-title">Race floor</h1>
             </div>
 
+            {inviteNotice && (
+              <p className="lobby-notice" role="status" aria-live="polite">
+                {inviteNotice}
+              </p>
+            )}
+
             <div className="lobby-actions">
               <button type="button" onClick={() => openLobbyMode("join")}>
                 <span>Join lobby</span>
@@ -267,6 +468,25 @@ function Lobby({ handleLogout, user }) {
               onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
               placeholder="A1B2C3"
             />
+            <label htmlFor="join-role">Join as</label>
+            <select
+              id="join-role"
+              value={joinRole}
+              onChange={(event) => setJoinRole(event.target.value)}
+            >
+              <option value="player" disabled={playersFull}>
+                Player
+              </option>
+              <option value="viewer" disabled={viewersFull}>
+                Viewer
+              </option>
+            </select>
+            {joinLobbyInfo && (
+              <p className="invite-meta">
+                {joinLobbyInfo.player_count} / {joinLobbyInfo.player_limit} players ·{" "}
+                {joinLobbyInfo.viewer_count} / {joinLobbyInfo.viewer_limit} viewers
+              </p>
+            )}
             <div className="profile-actions">
               <button className="secondary-button" type="button" onClick={() => openLobbyMode("home")}>
                 Cancel
@@ -347,7 +567,8 @@ function Lobby({ handleLogout, user }) {
             <label htmlFor="invite-link">Invite link</label>
             <input id="invite-link" type="text" readOnly value={createdInvite.link} />
             <p className="invite-meta">
-              {createdInvite.players} players / {createdInvite.viewers} viewers
+              {createdInvite.playerCount} / {createdInvite.players} players ·{" "}
+              {createdInvite.viewerCount} / {createdInvite.viewers} viewers
             </p>
             <button className="login-button" type="button" onClick={enterCreatedGame}>
               Continue to game

@@ -131,11 +131,30 @@ def generate_unique_lobby_code():
             return code
 
 
-def lobby_payload(lobby):
+def find_lobby(code):
+    clean_code = str(code).strip().upper()
+
+    if len(clean_code) != 6:
+        return None
+
+    return Lobby.query.filter_by(code=clean_code).first()
+
+
+def lobby_membership(lobby_id, user_id):
+    if Player.query.filter_by(lobby_id=lobby_id, user_id=user_id).first():
+        return "player"
+
+    if Viewer.query.filter_by(lobby_id=lobby_id, user_id=user_id).first():
+        return "viewer"
+
+    return None
+
+
+def lobby_payload(lobby, role=None):
     player_count = Player.query.filter_by(lobby_id=lobby.id).count()
     viewer_count = Viewer.query.filter_by(lobby_id=lobby.id).count()
 
-    return {
+    payload = {
         "code": lobby.code,
         "name": lobby.name,
         "host_user_id": lobby.host_user_id,
@@ -144,6 +163,11 @@ def lobby_payload(lobby):
         "player_count": player_count,
         "viewer_count": viewer_count,
     }
+
+    if role:
+        payload["role"] = role
+
+    return payload
 
 
 @app.post("/lobbies")
@@ -197,17 +221,73 @@ def create_lobby():
 @app.get("/lobbies/<code>")
 @jwt_required()
 def get_lobby(code):
-    clean_code = str(code).strip().upper()
-
-    if len(clean_code) != 6:
-        return jsonify({"message": "Lobby not found."}), 404
-
-    lobby = Lobby.query.filter_by(code=clean_code).first()
+    lobby = find_lobby(code)
 
     if not lobby:
         return jsonify({"message": "Lobby not found."}), 404
 
     return jsonify(lobby_payload(lobby))
+
+
+@app.post("/lobbies/<code>/join")
+@jwt_required()
+def join_lobby(code):
+    data = request.get_json(silent=True) or {}
+    role = str(data.get("role", "player")).strip().lower()
+
+    if role not in ("player", "viewer"):
+        return jsonify({"message": "Join as a player or a viewer."}), 400
+
+    lobby = find_lobby(code)
+
+    if not lobby:
+        return jsonify({"message": "Lobby not found."}), 404
+
+    user_id = int(get_jwt_identity())
+    existing_role = lobby_membership(lobby.id, user_id)
+
+    if existing_role:
+        if lobby.host_user_id == user_id and existing_role == "player":
+            response_role = "host"
+        else:
+            response_role = existing_role
+
+        return jsonify(lobby_payload(lobby, response_role))
+
+    if role == "player":
+        player_count = Player.query.filter_by(lobby_id=lobby.id).count()
+
+        if player_count >= lobby.player_limit:
+            return jsonify({"message": "That lobby is full."}), 409
+
+        db.session.add(
+            Player(
+                user_id=user_id,
+                lobby_id=lobby.id,
+                score=0,
+            )
+        )
+        response_role = "host" if lobby.host_user_id == user_id else "player"
+    else:
+        if lobby.viewer_limit <= 0:
+            return jsonify({"message": "This lobby has no viewer slots."}), 409
+
+        viewer_count = Viewer.query.filter_by(lobby_id=lobby.id).count()
+
+        if viewer_count >= lobby.viewer_limit:
+            return jsonify({"message": "Viewer slots are full."}), 409
+
+        db.session.add(
+            Viewer(
+                user_id=user_id,
+                lobby_id=lobby.id,
+            )
+        )
+        response_role = "viewer"
+
+    db.session.commit()
+
+    return jsonify(lobby_payload(lobby, response_role))
 
 
 if __name__ == "__main__":

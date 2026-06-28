@@ -162,7 +162,8 @@ button {
 
 .name-panel input,
 .profile-sheet input,
-.lobby-sheet input {
+.lobby-sheet input,
+.lobby-sheet select {
   width: 100%;
   margin: 0 0 22px;
   padding: 14px 15px;
@@ -175,7 +176,8 @@ button {
 
 .name-panel input:focus,
 .profile-sheet input:focus,
-.lobby-sheet input:focus {
+.lobby-sheet input:focus,
+.lobby-sheet select:focus {
   border-color: #161816;
   box-shadow: 0 0 0 3px #d8ff3e;
 }
