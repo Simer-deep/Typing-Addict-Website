@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import WaitingRoom from "./WaitingRoom";
 
 const BLOCKED_NAME_TERMS = [
   "admin",
@@ -62,13 +63,16 @@ function readInviteCode() {
 
 function Lobby({ handleLogout, user }) {
   const storageKey = `typing-addict-ingame-name-${user.user_id}`;
-  const inviteCodeRef = useRef(readInviteCode());
-  const [savedName, setSavedName] = useState(() => localStorage.getItem(storageKey) || "");
+  const [initialInviteCode] = useState(readInviteCode);
+  const inviteCodeRef = useRef(initialInviteCode);
+  const [savedName, setSavedName] = useState(
+    () => localStorage.getItem(storageKey) || user.display_name || ""
+  );
   const [draftName, setDraftName] = useState(savedName);
   const [profileOpen, setProfileOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [lobbyMode, setLobbyMode] = useState("home");
-  const [joinCode, setJoinCode] = useState(() => inviteCodeRef.current);
+  const [joinCode, setJoinCode] = useState(initialInviteCode);
   const [joinRole, setJoinRole] = useState("player");
   const [joinMessage, setJoinMessage] = useState("");
   const [inviteNotice, setInviteNotice] = useState("");
@@ -147,14 +151,12 @@ function Lobby({ handleLogout, user }) {
 
   useEffect(() => {
     if (lobbyMode !== "join") {
-      setJoinLobbyInfo(null);
       return;
     }
 
     const cleanCode = joinCode.trim().toUpperCase();
 
     if (!/^[A-Z0-9]{6}$/.test(cleanCode) || !/[A-Z]/.test(cleanCode) || !/[0-9]/.test(cleanCode)) {
-      setJoinLobbyInfo(null);
       return;
     }
 
@@ -207,8 +209,10 @@ function Lobby({ handleLogout, user }) {
     };
   }, [lobbyMode, joinCode]);
 
+  const createdInviteCode = createdInvite?.code;
+
   useEffect(() => {
-    if (!createdInvite) {
+    if (!createdInviteCode) {
       return;
     }
 
@@ -216,7 +220,7 @@ function Lobby({ handleLogout, user }) {
 
     async function refreshInviteCounts() {
       try {
-        const response = await fetch(`/lobbies/${createdInvite.code}`, {
+        const response = await fetch(`/lobbies/${createdInviteCode}`, {
           credentials: "include",
         });
         const data = await response.json();
@@ -242,9 +246,9 @@ function Lobby({ handleLogout, user }) {
       active = false;
       window.clearInterval(timer);
     };
-  }, [createdInvite?.code]);
+  }, [createdInviteCode]);
 
-  function saveName(event) {
+  async function saveName(event) {
     event.preventDefault();
     const validationMessage = validateInGameName(draftName);
 
@@ -254,6 +258,23 @@ function Lobby({ handleLogout, user }) {
     }
 
     const cleanName = draftName.trim().replace(/\s+/g, " ");
+    try {
+      const response = await fetch("/me/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ display_name: cleanName }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setMessage(data.message || "Could not save your name.");
+        return;
+      }
+    } catch {
+      setMessage("Could not connect to the server.");
+      return;
+    }
+
     localStorage.setItem(storageKey, cleanName);
     setSavedName(cleanName);
     setDraftName(cleanName);
@@ -308,11 +329,7 @@ function Lobby({ handleLogout, user }) {
         return;
       }
 
-      setActiveGame({
-        code: data.code,
-        name: data.name,
-        role: data.role,
-      });
+      setActiveGame(data);
     } catch {
       setJoinMessage("Could not connect to the server.");
     }
@@ -381,8 +398,15 @@ function Lobby({ handleLogout, user }) {
     });
   }
 
+  function exitActiveLobby(notice = "") {
+    setActiveGame(null);
+    setLobbyMode("home");
+    setCreatedInvite(null);
+    setInviteNotice(notice);
+  }
+
   if (activeGame) {
-    return <main className="game-page" aria-label="Typing game placeholder" />;
+    return <WaitingRoom lobby={activeGame} onExit={exitActiveLobby} user={user} />;
   }
 
   return (
@@ -465,7 +489,10 @@ function Lobby({ handleLogout, user }) {
               autoFocus
               maxLength="6"
               value={joinCode}
-              onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
+              onChange={(event) => {
+                setJoinCode(event.target.value.toUpperCase());
+                setJoinLobbyInfo(null);
+              }}
               placeholder="A1B2C3"
             />
             <label htmlFor="join-role">Join as</label>

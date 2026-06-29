@@ -120,7 +120,7 @@ function App() {
     }
   }
 
-  if (user && user.username !== "admin") {
+  if (user) {
     return <Lobby handleLogout={handleLogout} user={user.user ?? user} />;
   }
 

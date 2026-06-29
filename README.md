@@ -1,6 +1,7 @@
 # Typing Addict
 
-Login and registration starter for the type-racing app.
+Multiplayer typing race with persistent accounts, waiting-room rosters, host controls,
+and three server-timed rounds: typing, clicking, then spacebar.
 
 ## Run
 
@@ -8,6 +9,7 @@ Backend:
 
 ```powershell
 cd Backend
+python -m pip install -r requirements.txt
 python app.py
 ```
 
@@ -20,3 +22,14 @@ npm run dev
 ```
 
 Open the Vite URL to register, or sign in with `admin` / `password`.
+
+## Tests
+
+```powershell
+cd Backend
+python -m unittest -v test_app.py
+
+cd ..\Frontend
+npm run lint
+npm run build
+```
